@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AR Hairstyle Try-On</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: row;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #left {
+      flex: 1;
+      position: relative;
+      background: black;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #right {
+      width: 280px;
+      padding: 12px;
+      background: #f5f5f5;
+      overflow-y: auto;
+    }
+    video, canvas {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+    #hairStyles img {
+      width: 70px;
+      margin: 5px;
+      cursor: pointer;
+      border: 2px solid transparent;
+      border-radius: 8px;
+    }
+    #hairStyles img.selected {
+      border-color: #007bff;
+    }
+  </style>
+</head>
+<body>
+  <div id="left">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="output"></canvas>
+  </div>
+  <div id="right">
+    <h3>Pilih Gaya Rambut</h3>
+    <div id="hairStyles"></div>
+    <hr>
+    <p>Skala: <input type="range" id="scale" min="0.5" max="2" step="0.01" value="1"></p>
+    <p>Ofset Y: <input type="range" id="offsetY" min="-200" max="200" step="1" value="0"></p>
+    <p>Kelegapan: <input type="range" id="opacity" min="0" max="1" step="0.01" value="1"></p>
+    <p><button id="switchCam">Tukar Kamera</button></p>
+  </div>
+
+  <!-- MediaPipe -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('output');
+    const ctx = canvas.getContext('2d');
+
+    const scaleInput = document.getElementById('scale');
+    const offsetYInput = document.getElementById('offsetY');
+    const opacityInput = document.getElementById('opacity');
+    const switchCamBtn = document.getElementById('switchCam');
+    const hairStylesDiv = document.getElementById('hairStyles');
+
+    let hairImg = null;
+    let currentFacing = 'user';
+    let camera = null;
+
+    // 📌 Senarai fail rambut (manual sebab browser tak boleh baca folder terus)
+    const hairFiles = [
+      "rambut1.png",
+      "rambut2.png",
+      "rambut3.png",
+      "rambut4.png",
+    ];
+
+    // Auto-generate pilihan rambut
+    hairFiles.forEach(file => {
+      const img = document.createElement("img");
+      img.src = `assets/${file}`;
+      img.dataset.file = file;
+      img.addEventListener("click", () => {
+        document.querySelectorAll("#hairStyles img").forEach(i => i.classList.remove("selected"));
+        img.classList.add("selected");
+        const newImg = new Image();
+        newImg.onload = () => { hairImg = newImg; };
+        newImg.src = img.src;
+      });
+      hairStylesDiv.appendChild(img);
+    });
+
+    // Select default style
+    const firstImg = hairStylesDiv.querySelector("img");
+    if (firstImg) {
+      firstImg.classList.add("selected");
+      hairImg = new Image();
+      hairImg.src = firstImg.src;
+    }
+
+    switchCamBtn.addEventListener('click', () => {
+      currentFacing = (currentFacing === 'user') ? 'environment' : 'user';
+      startCamera();
+    });
+
+    function startCamera() {
+      if (camera) {
+        camera.stop();
+        camera = null;
+      }
+      const faceMesh = new FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+      });
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: false, // ringan sikit
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+      faceMesh.onResults(onResults);
+
+      camera = new Camera(video, {
+        onFrame: async () => {
+          await faceMesh.send({image: video});
+        },
+        width: 320,  // rendah sikit → kurang lag
+        height: 240,
+        facingMode: currentFacing
+      });
+      camera.start();
+    }
+
+    function onResults(results) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.save();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0 && hairImg) {
+        const landmarks = results.multiFaceLandmarks[0];
+        const left = landmarks[234];
+        const right = landmarks[454];
+        const center = landmarks[10]; // atas dahi
+
+        const faceWidth = Math.hypot(
+          (right.x - left.x) * canvas.width,
+          (right.y - left.y) * canvas.height
+        );
+
+        const scale = parseFloat(scaleInput.value);
+        const offsetY = parseFloat(offsetYInput.value);
+        const opacity = parseFloat(opacityInput.value);
+
+        const imgWidth = faceWidth * 2 * scale;
+        const imgHeight = imgWidth * (hairImg.height / hairImg.width);
+
+        const x = center.x * canvas.width - imgWidth/2;
+        const y = center.y * canvas.height - imgHeight/2 + offsetY;
+
+        ctx.globalAlpha = opacity;
+        ctx.drawImage(hairImg, x, y, imgWidth, imgHeight);
+        ctx.globalAlpha = 1.0;
+      }
+      ctx.restore();
+    }
+
+    startCamera();
+  </script>
+</body>
+</html>
